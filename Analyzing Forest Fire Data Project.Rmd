@@ -1,0 +1,107 @@
+---
+title: "Analyzing Forest Fire Data"
+author: "Kate Blaine"
+date: "May 6th, 2020"
+output: html_notebook
+---
+In this project, I will analyze data on forest fires to explore relationships between weather variables and forest fire severity. I will try to answer the following questions:
+
+1. During which months of the year and days of the week are forest fires most common?
+
+2. What are the relationships between weather variables and forest fire area?
+
+The data I will be working with can be found [here](https://archive.ics.uci.edu/ml/machine-learning-databases/forest-fires/) and is associated with a research paper on predicting the occurrence of forest fires in Portugal. The paper can be found [here](http://www3.dsi.uminho.pt/pcortez/fires.pdf).
+
+First let's load the packages we need to analyze the data.
+
+```{r}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(purrr)
+```
+
+Next, we'll import the data. 
+```{r}
+fires <- read.csv('forestfires.csv')
+```
+
+The data is mostly clean, I'd just like to change the month and day variables to a factor type so they will show up in chronological order in any data visualizations we create.
+```{r}
+month_order <- c('jan', 'feb', 'mar', 'apr', 'may', 'jun',
+                 'jul', 'aug', 'sep', 'oct', 'nov', 'dec')
+day_order <- c('sun', 'mon', 'tue', 'wed', 'thu', 'fri',
+               'sat')
+fires <- fires %>% 
+  mutate(month = factor(month, level = month_order),
+         day = factor(day, level = day_order))
+head(fires)
+```
+I'll start by creating a bar chart to find out which months of the year have the highest occurrence of forest fires.
+```{r}
+fire_month <- fires %>% 
+  group_by(month) %>%
+  summarize(number_fires = n())
+ggplot(data = fire_month) +
+  aes(x = factor(month, level = month_order),
+      y = number_fires) +
+  geom_bar(stat = 'identity') +
+  labs(title = 'Forest Fires vs. Months', x = 'Month',
+       y = 'Number of Forest Fires')
+```
+It is clear that August and September have the highest occurrences of forest fires. This could be explained by further analysis of weather variables. Now I will create a similar bar chart to analyze occurrences on each day of the week.
+```{r}
+fire_day <- fires %>%
+  group_by(day) %>%
+  summarize(number_fires = n())
+ggplot(data = fire_day) +
+  aes(x = factor(day, level = day_order), 
+      y = number_fires) +
+  geom_bar(stat = 'identity') +
+  labs(title = 'Forest Fires vs Days', x = 'Day', 
+       y = 'Number of Forest Fires')
+```
+Although the relationship between fire occurrences and days of the week is weaker, we can see that there are more occurrences during the weekend than on weekdays. This may be due to higher number of forest visitors during weekends. 
+
+Let's move on to analyze some weather variables. The variables are:
+
+- FFMC (Fine Fuel Moisture Code) from the Fire Weather Index (FWI) system
+- DMC (Duff Moisture Code) from the FWI system
+- DC (Drought Code) from the FWI system
+- ISI (Initial Spread Index) from the FWI system
+- temp (temperature in Celsius)
+- RH (relative humidity in percentage)
+- wind (wind speed in km/h)
+- rain (rain in mm/m^2)
+
+I'll use a functional to create a boxplot for each weather variable over months of the year.
+```{r}
+create_box = function(xvar, yvar){
+  ggplot(data = fires) +
+    aes_string(x = xvar, y = yvar) +
+    geom_boxplot()
+}
+weather_vars <- c('FFMC', 'DMC', 'DC', 'ISI', 'temp',
+                  'RH', 'wind', 'rain')
+map2(c('month'), weather_vars, create_box)
+```
+It seems that DC (Drought Code), DMC (Duff Moisture Code) and temp (temperature in Celsius) have the biggest spikes during the months of August and September, and therefore have a stronger relationship with forest fire occurrence. 
+
+Let's create boxplots to examine the relationship between weather variables and days of the week. 
+```{r}
+map2(c('day'), weather_vars, create_box)
+```
+There are no strong relationships shown by these boxplots. 
+
+Finally, let's create scatterplots to examine the relationships between weather variables and area (or fire severity).
+```{r}
+fires_area <- fires %>% 
+  filter(area > 3 & area < 300)
+create_scatter = function(xvar, yvar){
+  ggplot(data = fires_area) +
+    aes_string(x = xvar, y = yvar) +
+    geom_point()
+}
+map2(weather_vars, c('area'), create_scatter)
+```
+There are no strong relationships shown by these scatterplots, indicating that fire severity may be determined by factors other than weather variables.

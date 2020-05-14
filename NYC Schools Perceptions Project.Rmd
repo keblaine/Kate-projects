@@ -1,0 +1,133 @@
+---
+title: "Exploring NYC Schools Survey Data"
+author: "Kate Blaine"
+date: "May 13th, 2020"
+output: html_notebook
+---
+In this project, I will analyze data from the New York City Department of Education to explore relationships between average school SAT scores and parent, teacher, and student perceptions of the following factors: safety, engagement, communication, and academics. I will try to answer the following questions:
+
+1. Do student, teacher, and parent perceptions of school quality appear to be related to demographics and academic success?
+
+2. Do students, teachers, and parents have similar perceptions of school quality?
+
+The data is available [here](https://data.cityofnewyork.us/Education/2011-NYC-School-Survey/mnz3-dyi8).
+
+First, let's load the packages we need to clean and analyze the data.
+
+```{r}
+library(readr)
+library(dplyr)
+library(stringr)
+library(purrr)
+library(tidyr)
+library(ggplot2)
+```
+
+Next, we'll import the survey data. The first table contains data on demographics and academic performance. The second contains student, teacher, and parent perceptions for general education schools. The third table contains perceptions for special education schools. These dataframes can be combined using the DBN column.
+
+```{r}
+combined <- read_csv('combined.csv')
+gen_ed <- read_tsv('masterfile11_gened_final.txt')
+spec_ed <- read_tsv('masterfile11_d75_final.txt')
+```
+
+
+The first step will be to clean the gen_ed and spec_ed data frames. I'll select only variables I will use for analysis, namely, the key column DBN and any variables containing aggregate scores. Then I will combine gen_ed and spec_ed into one data frame, perceptions. To combine perceptions with combined (which contains demographic and academic success metrics), I will use a left join so only observations corresponding to data in combined will be left. Since combined contains only observations for high schools, this will automatically filter out any elementary schools contained in perceptions.
+```{r}
+gen_ed <- gen_ed %>%
+  select(dbn, schoolname, rr_s, rr_t, rr_p, saf_p_11, com_p_11, eng_p_11, aca_p_11, saf_t_11, com_t_11, eng_t_11, aca_t_11, saf_s_11, com_s_11, eng_s_11, aca_s_11, saf_tot_11, com_tot_11, eng_tot_11, aca_tot_11)
+
+spec_ed <- spec_ed %>%
+  select(dbn, schoolname, rr_s, rr_t, rr_p, saf_p_11, com_p_11, eng_p_11, aca_p_11, saf_t_11, com_t_11, eng_t_11, aca_t_11, saf_s_11, com_s_11, eng_s_11, aca_s_11, saf_tot_11, com_tot_11, eng_tot_11, aca_tot_11)
+
+perceptions <- bind_rows(gen_ed, spec_ed)
+
+nyc_schools <- combined %>%
+  rename(dbn = DBN) %>%
+  left_join(perceptions, by = 'dbn')
+```
+The first question I will explore is:
+
+Do student, teacher, and parent perceptions of NYC school quality appear to be related to demographic and academic success metrics?
+
+To start, I will create a correlation matrix to learn which relationships may require further investigation.
+```{r}
+cor_mat <- nyc_schools %>%
+  select(avg_sat_score, high_score_percent, frl_percent, asian_per, black_per, hispanic_per, white_per, female_per, saf_tot_11, com_tot_11, eng_tot_11, aca_tot_11) %>%
+  cor(use = 'pairwise.complete.obs')
+cor_tib <- cor_mat %>% 
+  as_tibble(rownames = 'variable')
+
+saf_tot_11_cors <- cor_tib %>%
+  select(variable, saf_tot_11) %>%
+  filter(saf_tot_11 > 0.25 |saf_tot_11 < -0.25)
+
+com_tot_11_cors <- cor_tib %>%
+  select(variable, com_tot_11) %>%
+  filter(com_tot_11 > 0.25 |com_tot_11 < -0.25)
+
+eng_tot_11_cors <- cor_tib %>%
+  select(variable, eng_tot_11) %>%
+  filter(eng_tot_11 > 0.25 |eng_tot_11 < -0.25)
+
+aca_tot_11_cors <- cor_tib %>%
+  select(variable, aca_tot_11) %>%
+  filter(aca_tot_11 > 0.25 |aca_tot_11 < -0.25)
+```
+Based on our correlation matrix, the relationships worth exploring are:
+
+AP Scores and academic performance score
+AP Scores and safety and respect score
+SAT Scores and safety and respect score
+African-American percentage and safety and respect score
+
+Interestingly, while there was a moderately strong correlation between AP Scores and academic performance score, there was only a weak correlation between SAT Scores and academic performance score. This could indicate that AP Scores weigh more on perception than SAT Scores.
+
+Next, I will create scatter plots to explore these relationships in further detail.
+```{r}
+create_scatter = function(xvar, yvar){
+  ggplot(data = nyc_schools) +
+    aes_string(x = xvar, y = yvar) +
+    geom_point() 
+}
+
+map2(c('high_score_percent'), c('aca_tot_11'), create_scatter)
+safety_vars <- c('high_score_percent', 'avg_sat_score', 'black_per')
+map2(safety_vars, c('saf_tot_11'), create_scatter)
+```
+There appear to be (very) weak positive relationships between the following
+
+AP Scores and academic performance score
+AP Scores and safety and respect score
+SAT Scores and safety and respect score
+
+and a very weak negative relationship between African-American percentage and safety and respect score.
+
+The next question I will explore is:
+
+Do students, teachers, and parents have similar perceptions of school quality?
+
+To do this, I need to reshape nyc_schools so that the survey question and score are in two separate columns. 
+```{r}
+nyc_schools <- nyc_schools %>% 
+  pivot_longer(cols = c(saf_p_11, com_p_11, aca_p_11, eng_p_11, saf_t_11, com_t_11, aca_t_11, eng_t_11, saf_s_11, com_s_11, aca_s_11, eng_s_11, saf_tot_11, aca_tot_11, eng_tot_11, com_tot_11), names_to = 'question', values_to = 'score')
+
+nyc_schools <- nyc_schools %>%
+  mutate(response_type = str_sub(question, 4, 6)) %>%
+  mutate(question = str_sub(question, 1, 3))
+
+nyc_schools <- nyc_schools %>%
+  mutate(response_type = ifelse(response_type == '_p_', 'parent',
+                               ifelse(response_type == '_t_', 'teacher',
+                                      ifelse(response_type == '_s_', 'student',
+                                             ifelse(response_type == '_to', 'total', 'NA')))))
+```
+Finally, I will make boxplots to explore the differences in responses between parents, teachers, and students.
+```{r}
+nyc_schools %>%
+  filter(response_type != 'total') %>%
+  ggplot() +
+  aes(x = question, y = score, fill = response_type) +
+  geom_boxplot()
+```
+Based on our boxplots, it seems that parents on average gave school quality a higher score, and students on average gave school quality a lower score. It is also interesting to note that the range of teacher responses is much larger than the range of either parent or student responses.
