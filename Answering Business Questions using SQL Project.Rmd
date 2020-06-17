@@ -1,0 +1,223 @@
+---
+title: "Answering Business Questions using SQL"
+author: 'Kate Blaine'
+date: 'June 3rd, 2020'
+output: html_notebook
+---
+
+In this project, I will analyze data from a record company to answer business questions.
+
+```{r}
+library(DBI)
+library(RSQLite)
+library(ggplot2)
+```
+
+First, we create helper functions for running SQL queries.
+
+```{r}
+run_query <- function(q){
+  conn <- dbConnect(SQLite(), 'chinook.db')
+  res <- dbSendQuery(conn, q)
+  result <- dbFetch(res)
+  dbDisconnect(conn)
+  return(result)
+}
+show_tables <- function(){
+  q = "SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view')"
+  return(run_query(q))
+}
+show_tables()
+
+```
+
+The following query retrieves the number of tracks sold for each genre in the US.
+
+```{r}
+genre_sales <- '
+WITH usa_tracks_sold AS 
+  (
+  SELECT il.* FROM invoice_line il
+      INNER JOIN invoice i on il.invoice_id = i.invoice_id
+      INNER JOIN customer c on i.customer_id = c.customer_id
+      WHERE c.country = "USA"
+  )
+SELECT 
+  g.name genre, 
+  COUNT(uts.invoice_line_id) AS number_sold,
+  CAST(COUNT(uts.invoice_line_id) AS Float) / (SELECT COUNT(*) FROM usa_tracks_sold)
+   percentage_sold
+FROM usa_tracks_sold uts
+  INNER JOIN track t on t.track_id = uts.track_id
+  INNER JOIN genre g on g.genre_id = t.genre_id
+GROUP BY genre
+ORDER BY number_sold DESC
+LIMIT 10;
+'
+genre_data <- run_query(genre_sales)
+```
+
+We will visualize the results with a bar chart.
+
+```{r}
+ggplot(data = genre_data) +
+  aes(x = genre, y = percentage_sold) +
+  geom_bar(stat = 'identity')
+
+```
+
+Clearly, the most tracks sold belong to the rock genre. Next, we'll analyze employee performance based on purchases of customers belonging to each sales support agent.
+
+```{r}
+employee_query <- '
+WITH support_sales AS
+  (
+  SELECT
+    i.customer_id,
+    c.support_rep_id,
+    SUM(i.total) total
+  FROM invoice i
+  INNER JOIN customer c ON i.customer_id = c.customer_id
+  GROUP BY 1, 2
+  )
+SELECT
+  e.first_name || " " || e.last_name employee,
+  e.hire_date, 
+  SUM(ss.total) total_sales
+FROM support_sales ss
+INNER JOIN employee e ON e.employee_id = ss.support_rep_id
+GROUP BY 1;
+'
+
+employee_sales <- run_query(employee_query)
+employee_sales
+```
+
+We will visualize the results with a bar chart.
+
+```{r}
+ggplot(data = employee_sales) + 
+  aes(x = employee, y = total_sales) +
+  geom_bar(stat = 'identity')
+```
+
+According to the bar chart, Jane Peacock has had the most sales. However, of the 3 employees, Jane Peacock was the first to start at the company, followed by Margaret Park and then Steve Johnson. The difference in sales may be affected by the amount of time the employee has worked at the company.
+
+Next, we'll analyze sales by country. 
+```{r}
+country_query <- '
+WITH country_or_other AS
+  (
+  SELECT 
+    CASE
+      WHEN(
+        SELECT COUNT(*) FROM customer
+        WHERE country = c.country
+      ) = 1 THEN "Other"
+      ELSE c.country
+    END AS country,
+    c.customer_id,
+    il.*
+  FROM invoice_line il
+  INNER JOIN invoice i ON i.invoice_id = il.invoice_id
+  INNER JOIN customer c ON c.customer_id = i.customer_id
+  )
+SELECT 
+  country,
+  customers,
+  total_sales,
+  average_order,
+  customer_lifetime_value
+FROM
+  (
+  SELECT
+    country,
+    COUNT(DISTINCT customer_id) customers,
+    SUM(unit_price) total_sales,
+    SUM(unit_price)/COUNT(DISTINCT customer_id) customer_lifetime_value,
+    SUM(unit_price)/COUNT(DISTINCT invoice_id) average_order,
+    CASE
+      WHEN country = "Other" THEN 1
+      ELSE 0
+    END AS sort
+    FROM country_or_other
+    GROUP BY country
+    ORDER BY sort ASC, total_sales DESC
+  );
+  '
+country_data <- run_query(country_query)
+country_data
+```
+
+Let's visualize this data using 3 bar charts: one depicting total sales, one for total customers, and one for average customer orders.
+
+```{r}
+ggplot(data = country_data) +
+  aes(x = country, y = total_sales, fill = country) +
+  geom_bar(stat = 'identity') +
+  labs(title = 'Total sales by country', x = 'Country', y = 'Total sales')
+
+ggplot(data = country_data) +
+  aes(x = country, y = customers, fill = country) +
+  geom_bar(stat = 'identity') + 
+  labs(title = 'Number of customers by country', x = 'Country', y = 'Customers')
+
+ggplot(data = country_data) +
+  aes(x = country, y = customer_lifetime_value, fill = country) +
+  geom_bar(stat = 'identity') +
+  labs(title = 'Customer lifetime value by country', x = 'Country', y = 'Customer lifetime value')
+```
+
+Based on these bar charts, we can see that the United States has the most sales and customers, but the customers don't necessarily have very large orders. On the other hand, the Czech Republic has a lower number of customers, but those customers are making relatively large orders. There may be an opportunity for expansion in the Czech Republic to bring in more customers.
+
+Finally, we're going to explore whether customers are more likely to purchase a whole album or individual tracks from an album.
+```{r}
+album_query <- '
+WITH invoice_first_track AS
+  (
+  SELECT
+    il.invoice_id invoice_id,
+    MIN(il.track_id) first_track_id
+  FROM invoice_line il
+  GROUP BY 1
+  )
+SELECT
+  album_purchase,
+  COUNT(invoice_id) number_of_invoices,
+  CAST(COUNT(invoice_id) AS Float) / (SELECT COUNT(*) FROM invoice) percent
+FROM (
+SELECT
+  ifs.*,
+  CASE
+    WHEN
+      (
+      SELECT t.track_id FROM track t
+      WHERE t.album_id = (SELECT t2.album_id FROM track t2 WHERE t2.track_id = ifs.first_track_id)
+      
+      EXCEPT
+      
+      SELECT il2.track_id FROM invoice_line il2
+      WHERE il2.invoice_id = ifs.invoice_id
+      ) IS NULL
+    AND
+      (
+      SELECT il2.track_id FROM invoice_line il2
+      WHERE il2.invoice_id = ifs.invoice_id
+      
+      EXCEPT
+      
+      SELECT t.track_id FROM track t
+      WHERE t.album_id = (SELECT t2.album_id FROM track t2 WHERE t2.track_id = ifs.first_track_id)
+      ) IS NULL
+    THEN "Yes"
+    ELSE "No"
+  END AS album_purchase
+FROM invoice_first_track ifs
+      )
+GROUP BY album_purchase;
+'
+album_data <- run_query(album_query)
+album_data
+```
+
+According to the results, full album purchases account for about 18% of all purchases. Therefore, the company should continue buying full albums from record companies.
